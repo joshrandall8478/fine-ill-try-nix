@@ -155,6 +155,8 @@ restored at login.
 | `Mod+H/J/K/L` | focus (arrows also work) |
 | `Mod+1..5` | named workspaces |
 | `Mod+R` / `Mod+F` / `Mod+V` | preset widths, maximize, float |
+| `Mod+Shift`+arrows | resize — the window grows the way you press |
+| `Mod+Shift+H` / `Mod+Shift+L` | focus the monitor left / right |
 | `Print` / `Mod+Shift+S` | region screenshot, annotated in satty |
 | `Ctrl+Print` / `Alt+Print` | screen / window (niri's built-ins) |
 | `Mod+Escape` / `Mod+Shift+Escape` | lock, session menu |

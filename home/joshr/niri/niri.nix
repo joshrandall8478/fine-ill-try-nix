@@ -340,10 +340,18 @@ ${workspaceBlocks}
         Mod+Ctrl+TouchpadScrollUp   cooldown-ms=150 { move-column-to-workspace-up; }
 
         // --- monitors ---------------------------------------------------
-        Mod+Shift+Left  { focus-monitor-left; }
-        Mod+Shift+Right { focus-monitor-right; }
+        // On the letter keys rather than the arrows: Mod+Shift+arrows now
+        // resize (see sizing below). Everything else here already mirrors
+        // arrows with H/J/K/L, so monitor focus reads the same way.
+        Mod+Shift+H { focus-monitor-left; }
+        Mod+Shift+L { focus-monitor-right; }
+
+        // Carrying a column across keeps both spellings — Ctrl+Shift+arrows
+        // were never claimed by resizing.
         Mod+Shift+Ctrl+Left  { move-column-to-monitor-left; }
         Mod+Shift+Ctrl+Right { move-column-to-monitor-right; }
+        Mod+Shift+Ctrl+H     { move-column-to-monitor-left; }
+        Mod+Shift+Ctrl+L     { move-column-to-monitor-right; }
 
         // --- sizing -----------------------------------------------------
         Mod+R       { switch-preset-column-width; }
@@ -356,6 +364,18 @@ ${workspaceBlocks}
         Mod+Equal   { set-column-width "+10%"; }
         Mod+Shift+Minus { set-window-height "-10%"; }
         Mod+Shift+Equal { set-window-height "+10%"; }
+
+        // Resize with the arrows: the direction you press is the direction
+        // the window grows. Right/Up enlarge, Left/Down shrink.
+        //
+        // Width is a *column* property and height a *window* one — that's
+        // niri's model, not a slip. A column holding two stacked windows
+        // widens as a unit, while Up/Down resize only the focused window
+        // within it.
+        Mod+Shift+Left  { set-column-width "-10%"; }
+        Mod+Shift+Right { set-column-width "+10%"; }
+        Mod+Shift+Up    { set-window-height "+10%"; }
+        Mod+Shift+Down  { set-window-height "-10%"; }
 
         Mod+BracketLeft  { consume-or-expel-window-left; }
         Mod+BracketRight { consume-or-expel-window-right; }
