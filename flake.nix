@@ -90,6 +90,16 @@
             hostModule = ./hosts/laptop-niri/configuration.nix;
             homeModule = ./home/joshr/laptop-niri.nix;
           };
+
+          # --- headless --------------------------------------------------
+          # Docker and the shell environment. No session, no display manager,
+          # no GPU driver. Goes through the same mkHost as the rest so root
+          # still gets fish and starship, and joshr's prompt is identical to
+          # the workstations'.
+          server = mkHost {
+            hostModule = ./hosts/server/configuration.nix;
+            homeModule = ./home/joshr/server.nix;
+          };
         };
 
       formatter.${system} = pkgs.nixfmt-rfc-style;

@@ -1,6 +1,9 @@
 { config, lib, pkgs, ... }:
 
 {
+  # local.base.graphical gates the display-only parts below.
+  imports = [ ./options.nix ];
+
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   # NVIDIA, Steam, VS Code, Vivaldi, Spotify and Discord are all unfree.
@@ -33,19 +36,25 @@
   # Fish is the primary interactive shell for this workstation.
   programs.fish.enable = true;
 
-  environment.systemPackages = with pkgs; [
-    papirus-icon-theme
-    bibata-cursors
-    git
-    curl
-    wget
-    kitty
-    vim
-    btop
-    ranger
-    gh
-    glab
-  ];
+  # Command-line tools, on every host including the server.
+  environment.systemPackages =
+    (with pkgs; [
+      git
+      curl
+      wget
+      vim
+      btop
+      ranger
+      gh
+      glab
+    ])
+    # A terminal emulator, a cursor and an icon theme need a screen to be of
+    # any use.
+    ++ lib.optionals config.local.base.graphical (with pkgs; [
+      kitty
+      bibata-cursors
+      papirus-icon-theme
+    ]);
 
   programs.vim = {
    enable = true;
@@ -61,11 +70,16 @@
 
   services.tailscale.enable = true;
 
-  fonts.packages = with pkgs; [
-    noto-fonts
-    noto-fonts-color-emoji
-    nerd-fonts.fira-code
-    (google-fonts.override { fonts = [ "Poppins" ]; })
+  fonts.packages = lib.optionals config.local.base.graphical (
+    with pkgs;
+    [
+      noto-fonts
+      noto-fonts-color-emoji
+      nerd-fonts.fira-code
+      (google-fonts.override { fonts = [ "Poppins" ]; })
+    ]
+  );
+  fonts.fontconfig.defaultFonts.monospace = lib.mkIf config.local.base.graphical [
+    "FiraCode Nerd Font Mono"
   ];
-  fonts.fontconfig.defaultFonts.monospace = [ "FiraCode Nerd Font Mono" ];
 }

@@ -7,6 +7,49 @@
 # everyone else gets the fastfetch one. Reproduced here via
 # `local.shell.fastfetchGreeting`.
 let
+  # The colour scheme, taken from the theme file fish itself ships rather than
+  # transcribed here.
+  #
+  # `fish_config theme choose` writes the palette into fish's *universal*
+  # variables, which is exactly the kind of state this repo exists to avoid:
+  # it lives in ~/.config/fish/fish_variables, survives a rebuild, and differs
+  # per machine and per user. Reading the same .theme file at build time and
+  # setting the variables globally gets the identical result declaratively.
+  # Globals also win over universals in fish's scoping, so an old
+  # `fish_config` choice still sitting in fish_variables is overridden rather
+  # than fought with.
+  #
+  # A .theme file is `name value...` lines with `#` comments. Each becomes a
+  # `set -g`, with `--` before the values so entries like `-r` and
+  # `--background=…` are read as values and not as options to `set`.
+  fishThemeName = "Base16 Eighties";
+
+  fishTheme = pkgs.runCommand "fish-theme-${lib.replaceStrings [ " " ] [ "-" ] (lib.toLower fishThemeName)}.fish" { } ''
+    themes="${pkgs.fish}/share/fish/tools/web_config/themes"
+    src="$themes/${fishThemeName}.theme"
+
+    # Loud rather than silent: an empty colour file would just look like the
+    # theme quietly not applying, which is a miserable thing to debug.
+    if [ ! -f "$src" ]; then
+      echo "fish theme '${fishThemeName}' not found at $src" >&2
+      echo "themes this fish ships:" >&2
+      ls "$themes" >&2
+      exit 1
+    fi
+
+    awk 'NF && $1 !~ /^#/ {
+      name = $1
+      $1 = ""
+      sub(/^[ \t]+/, "")
+      printf "set -g %s -- %s\n", name, $0
+    }' "$src" > "$out"
+
+    if [ ! -s "$out" ]; then
+      echo "parsed no colours out of $src" >&2
+      exit 1
+    fi
+  '';
+
   # The two branches of the {{ if eq .chezmoi.username "root" }} block in
   # config.fish.tmpl, kept as whole functions so they read the same way.
   fishGreeting =
@@ -33,33 +76,8 @@ in
     # Upstream config.fish.tmpl sources /usr/share/cachyos-fish-config behind an
     # existence check; that path never exists on NixOS, so it's omitted here.
     interactiveShellInit = ''
-      # Base16 Default Dark
-         set -g fish_color_normal d8d8d8
-         set -g fish_color_command 7cafc2
-         set -g fish_color_keyword ba8baf
-         set -g fish_color_quote a1b56c
-         set -g fish_color_redirection 86c1b9
-         set -g fish_color_end ba8baf
-         set -g fish_color_error ab4642
-         set -g fish_color_param d8d8d8
-         set -g fish_color_comment 585858
-         set -g fish_color_selection --background=383838
-         set -g fish_color_search_match --background=383838
-         set -g fish_color_operator 86c1b9
-         set -g fish_color_escape 86c1b9
-         set -g fish_color_autosuggestion 585858
-         set -g fish_color_cwd f7ca88
-         set -g fish_color_cwd_root ab4642
-         set -g fish_color_user a1b56c
-         set -g fish_color_host 7cafc2
-         set -g fish_color_valid_path --underline
-
-      # pager
-         set -g fish_pager_color_progress 585858
-         set -g fish_pager_color_prefix 86c1b9
-         set -g fish_pager_color_completion d8d8d8
-         set -g fish_pager_color_description 585858
-         set -g fish_pager_color_selected_background --background=383838
+      # ${fishThemeName}, generated from fish's own theme file — see above.
+      source ${fishTheme}
 
       # overwrite greeting
       # potentially disabling fastfetch

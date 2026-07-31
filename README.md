@@ -17,7 +17,11 @@ hosts/gamestation/                # the desk: NVIDIA, multi-monitor
 hosts/laptop/                     # portable: no NVIDIA, single display
   configuration.nix
   hardware-configuration.nix      # PLACEHOLDER — regenerate on the machine
+hosts/server/                     # headless: docker + shell, nothing else
+  configuration.nix
+  hardware-configuration.nix      # PLACEHOLDER — throws until regenerated
 modules/nixos/
+  options.nix                     # system-level local.* options
   base.nix                        # nix settings, locale/timezone, fish, base fonts
   desktop.nix                     # SDDM (Wayland) + Plasma 6, portals, audio, Flatpak
   plasma-xdg-data-dirs.nix        # workaround for nixpkgs#126590 (see below)
@@ -33,6 +37,7 @@ home/common/
 home/joshr/
   gamestation.nix                  # host entrypoint: enables the 2nd-monitor panel
   laptop.nix                       # host entrypoint: single-display panels
+  server.nix                       # host entrypoint: shell only, no desktop
   home.nix                         # packages (Vivaldi, Spotify, Discord, ProtonUp-Qt, ...)
   kitty.nix                        # kitty terminal + zenwritten_dark theme
   vscode.nix                       # VS Code settings + extension list
@@ -351,6 +356,26 @@ Note that only fish carries the eza aliases (`ls`, `ll`, `la`, `lt`, `lg`) —
 those came from the dotfiles' `config.fish.tmpl` and haven't been mirrored
 into the other shells.
 
+**Fish's colours are Base16 Eighties**, on every host and for both `joshr` and
+`root`, since they all come through `home/common/shell.nix`.
+
+The palette isn't transcribed into the Nix — it's read at build time out of
+the `.theme` file fish itself ships, under
+`share/fish/tools/web_config/themes/`, and converted into `set -g` lines. So
+it's exactly what `fish_config` would apply, without the state.
+
+That matters because `fish_config theme choose` writes the palette into fish's
+*universal* variables, which land in `~/.config/fish/fish_variables`: outside
+the store, surviving rebuilds, and drifting per machine and per user — the
+opposite of what this repo is for. Setting them globally instead also wins on
+fish's scoping rules (local → function → global → universal), so an old
+`fish_config` choice still sitting in `fish_variables` is overridden rather
+than fought with.
+
+To change it, edit `fishThemeName` in `home/common/shell.nix`. A name fish
+doesn't ship fails the build and lists the ones it does, rather than leaving
+you with an uncoloured prompt and nothing to go on.
+
 ## The root account
 
 `root` uses fish as its login shell and gets the same starship prompt and eza
@@ -597,20 +622,53 @@ from the systemd-boot menu at startup — nothing is destroyed by a bad switch.
 
 ## Hosts
 
-Two are defined. Pick one with the flake attribute:
+Pick one with the flake attribute:
 
 | Host | For | Differences |
 |---|---|---|
 | `gamestation` | the desk | NVIDIA module; second-monitor panel |
 | `laptop` | portable | no NVIDIA; power management; single-display panels |
+| `gamestation-niri` | the desk, niri | niri + SDDM instead of Plasma |
+| `laptop-niri` | portable, niri | same, on the laptop |
+| `server` | headless | Docker + shell only; no session, no GPU, no fonts |
 
 ```bash
 sudo nixos-rebuild switch --flake .#gamestation
 sudo nixos-rebuild switch --flake .#laptop
+sudo nixos-rebuild switch --flake .#server
 ```
 
-Both share everything else — the same modules, the same `home/joshr` profile,
-the same Plasma theming, the same package set.
+The two workstations share everything else — the same modules, the same
+`home/joshr` profile, the same Plasma theming, the same package set.
+
+### The server
+
+`hosts/server/configuration.nix` imports only `base.nix`, `virtualisation.nix`
+(Docker + Compose) and `users.nix`. No desktop module, no display manager, no
+`nvidia.nix`, no `gaming.nix`.
+
+It sets `local.base.graphical = false`, which drops the parts of `base.nix`
+that need a screen — the terminal emulator, cursor theme, icon theme and the
+font set. Everything else in there still applies: nix settings, locale, ssh,
+tailscale, and the command-line tools (`git`, `vim`, `btop`, `ranger`, `gh`,
+`glab`).
+
+The shell is deliberately *identical* to the workstations'. `joshr` and `root`
+both get fish as their login shell, the same starship prompt, the same eza
+aliases and the same Base16 Eighties palette, because
+`home/joshr/server.nix` imports the same `home/common/shell.nix` everything
+else does. What it does not import is `home/joshr/home.nix` — that is the
+workstation profile (Vivaldi, VS Code, OBS, Lutris, kitty), all of which would
+otherwise be built and dragged into a headless closure.
+
+**Its hardware placeholder throws rather than building.** The other hosts ship
+placeholders naming devices like `/dev/disk/by-label/nixos`, which evaluate
+fine and then leave the machine hanging at `A start job is running for
+/dev/disk/by-label/...` — a broken generation you can only escape from the
+boot menu. `hosts/server/hardware-configuration.nix` fails at eval with the
+command to run instead. The trade is that `nix flake check` will fail on
+`server` until you replace it, which is the honest state of affairs: that host
+genuinely cannot be built yet.
 
 ### What actually differs
 

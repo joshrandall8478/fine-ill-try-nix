@@ -5,6 +5,24 @@
 # The home-manager equivalents live in home/common/options.nix; these are the
 # ones a NixOS module needs to read, which can't come from there.
 {
+  options.local.base.graphical = lib.mkOption {
+    type = lib.types.bool;
+    default = true;
+    description = ''
+      Whether this host has a screen attached.
+
+      `base.nix` is shared by every host, and carries a few things that only
+      make sense with a display: a terminal emulator, a cursor theme, an icon
+      theme, and the font set. False drops them, leaving the parts a headless
+      machine actually uses — nix settings, locale, fish, ssh, tailscale, and
+      the command-line tools.
+
+      Only the server sets this. It is not a "minimal" switch: the shell
+      environment is deliberately identical everywhere, so a server feels the
+      same to log into as the desk.
+    '';
+  };
+
   options.local.sddm.theme = lib.mkOption {
     type = lib.types.enum [
       "stock"
