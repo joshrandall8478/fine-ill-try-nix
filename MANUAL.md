@@ -1172,10 +1172,13 @@ card to point at, and the corners, edge and shadow are baked into the rendered
 image rather than left to Hyprlock's `rounding` and `border_size`, because a
 Hyprlock border would draw a neat empty box around the transparent one.
 
-The backdrop is darkened past what Hyprlock's own `brightness` does to the
-wallpaper. Wallpapers are chosen and mostly dark; album covers are neither,
-and a sleeve that is mostly white leaves the pale theme foreground sitting on
-top of it unreadable.
+The backdrop is also exposed rather than simply copied. Hyprlock's own
+`brightness` is a fixed multiplier set for the wallpapers, which are chosen
+and mostly dark; album covers are neither, and a sleeve that is mostly white
+leaves every label on the screen sitting on a pale wash. So each cover is
+dimmed *to* a target lightness instead of by a constant — never brightened,
+and never dimmed by more than two thirds, which is the point past which a
+cover stops being visible at all rather than merely dim.
 
 The cover is fetched with the same care as anything else that comes off the
 network. Only `http`, `https` and `file` URLs are followed, `--proto-redir`
@@ -1196,6 +1199,44 @@ and a wedged one (a hung browser tab, usually) blocks its caller for D-Bus's
 own 25-second default. Two of the three callers cannot afford that: one runs
 on Hyprlock's main thread, and one runs on the path that has to have the
 screen locked before the machine suspends.
+
+#### And the colours come off the cover too
+
+The password field's outline, the clock, the greeting, the track name and the
+session controls all take their colour from the sleeve, so the whole screen
+belongs to the record rather than to the picture alone.
+
+The cover decides exactly one thing: a hue. Everything else is fixed in
+`home/joshr/niri/album-palette.awk`, which reads the same twelve-colour
+histogram the exposure comes from, takes the hue of the colour the sleeve is
+*mostly* made of — skipping greys, and skipping anything so dark or so light
+that the eye reads it as black or white regardless of what its saturation
+claims — and rebuilds the theme's five lock-screen colours at that hue with
+fixed lightnesses and a bounded amount of the cover's own saturation. A neon
+sleeve and a washed-out one land in the same place, which is the point: this
+is a screen that has to stay readable over a picture nobody chose.
+
+`LOCK_ERR` and `LOCK_WARN` keep the theme's values. An error is red and a
+caps-lock warning is yellow whatever is playing.
+
+A cover with no colour confident enough to build on — a black-and-white
+photograph, a plain white sleeve — produces no palette at all, and the lock
+screen keeps the theme's own colours. Only the exposure comes out of that
+pass, which every cover needs.
+
+**The colours are fixed for the life of the lock screen**, even though the
+pictures behind them are not. Hyprlock can be told to re-read a *path* while
+it is up — `reload_cmd` is exactly that, and it is how the background and the
+card follow the music — but there is no equivalent for a colour anywhere in
+its config. A label's colour could be smuggled in through markup; the password
+field's cannot, and that was half the point. Recolouring only the half that
+could be recoloured would leave the screen in two albums' colours at once,
+which is worse than a screen that wears the track it was locked on.
+
+The palette file is read rather than sourced, one known key at a time and only
+when the value is six hex digits. It is our own file and holds nothing else,
+but it lives in a cache directory rather than in the store, and `lock-session`
+is the script standing between a locked session and the desktop.
 
 #### Everything locks through `lock-now`
 

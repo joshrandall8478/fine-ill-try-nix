@@ -811,16 +811,21 @@ lockNowPlaying = pkgs.writeShellApplication {
   albumArtPaths = ''
     art_cache="''${XDG_CACHE_HOME:-$HOME/.cache}/niri/album-art"
 
-    # <cover url> <backdrop|cover|lock|source> -> the file that belongs to it.
-    art_path() {
-      local key
-      key="$(printf '%s' "$1" | sha256sum | cut -c1-32)"
+    # <cover url> -> the name everything about that cover is filed under.
+    art_key() {
+      printf '%s' "$1" | sha256sum | cut -c1-32
+    }
 
+    # <key> <backdrop|cover|palette|lock|source> -> the file that belongs to
+    # it. Takes the key rather than the URL so that a caller which wants
+    # several of these pays for the hash once.
+    art_path() {
       case "$2" in
-        backdrop) printf '%s\n' "$art_cache/$key.backdrop.jpg" ;;
-        cover)    printf '%s\n' "$art_cache/$key.cover.png" ;;
-        lock)     printf '%s\n' "$art_cache/.$key.lock" ;;
-        source)   printf '%s\n' "$art_cache/.$key.source" ;;
+        backdrop) printf '%s\n' "$art_cache/$1.backdrop.jpg" ;;
+        cover)    printf '%s\n' "$art_cache/$1.cover.png" ;;
+        palette)  printf '%s\n' "$art_cache/$1.palette" ;;
+        lock)     printf '%s\n' "$art_cache/.$1.lock" ;;
+        source)   printf '%s\n' "$art_cache/.$1.source" ;;
       esac
     }
   '';
@@ -897,8 +902,9 @@ lockNowPlaying = pkgs.writeShellApplication {
       '';
 
   # Renders the current track's cover into the two shapes the lock screen
-  # wants: a blurred full-screen backdrop that stands in for the wallpaper,
-  # and a small framed card to sit above the track name.
+  # wants — a blurred full-screen backdrop that stands in for the wallpaper,
+  # and a small framed card to sit above the track name — and reads the
+  # colours off it that the rest of the lock screen then wears.
   #
   # Run detached, by `lock-album-art` whenever a track turns up that has never
   # been rendered. It downloads and it runs ImageMagick, so it is the half of
@@ -913,6 +919,7 @@ lockNowPlaying = pkgs.writeShellApplication {
       curl
       file
       findutils
+      gawk
       imagemagick
       playerctl
       util-linux
@@ -941,10 +948,13 @@ lockNowPlaying = pkgs.writeShellApplication {
           ;;
       esac
 
-      art_backdrop="$(art_path "$art_url" backdrop)"
-      art_cover="$(art_path "$art_url" cover)"
+      key="$(art_key "$art_url")"
+      art_backdrop="$(art_path "$key" backdrop)"
+      art_cover="$(art_path "$key" cover)"
+      art_palette="$(art_path "$key" palette)"
 
-      if [ -f "$art_backdrop" ] && [ -f "$art_cover" ]; then
+      if [ -f "$art_backdrop" ] && [ -f "$art_cover" ] && [ -f "$art_palette" ]
+      then
         exit 0
       fi
 
@@ -955,20 +965,24 @@ lockNowPlaying = pkgs.writeShellApplication {
       # timer that will ask again in a couple of seconds anyway — and two
       # curls racing to write the same cache entry is the one way this could
       # hand Hyprlock a half-written JPEG.
-      exec 9>"$(art_path "$art_url" lock)"
+      exec 9>"$(art_path "$key" lock)"
       if ! flock -n 9; then
         exit 0
       fi
 
       # The holder we just queued behind may have finished the job.
-      if [ -f "$art_backdrop" ] && [ -f "$art_cover" ]; then
+      if [ -f "$art_backdrop" ] && [ -f "$art_cover" ] && [ -f "$art_palette" ]
+      then
         exit 0
       fi
 
-      source_file="$(art_path "$art_url" source)"
+      source_file="$(art_path "$key" source)"
       tmp_backdrop="$art_backdrop.tmp"
       tmp_cover="$art_cover.tmp"
-      trap 'rm -f "$source_file" "$tmp_backdrop" "$tmp_cover"' EXIT
+      tmp_palette="$art_palette.tmp"
+      trap '
+        rm -f "$source_file" "$tmp_backdrop" "$tmp_cover" "$tmp_palette"
+      ' EXIT
 
       case "$art_url" in
         file://*)
@@ -1022,25 +1036,52 @@ lockNowPlaying = pkgs.writeShellApplication {
       # and without it ImageMagick writes one output file per frame and the
       # moves at the bottom find nothing where they expect a render.
 
+      # What colour the cover is, in one pass, before anything is drawn with
+      # it. A twelve-colour histogram of a 100px copy is a cheap and honest
+      # summary of a sleeve; `album-palette.awk` turns it into the exposure
+      # the backdrop is rendered at and the palette the lock screen wears.
+      # Alpha is flattened onto black first, so a transparent PNG cover does
+      # not report the colour of nothing.
+      if ! magick "''${source_file}[0]" \
+          -background black -alpha remove -alpha off \
+          -resize 100x100^ -gravity center -extent 100x100 \
+          -depth 8 -colors 12 \
+          -format %c histogram:info:- |
+          gawk -f ${./album-palette.awk} > "$tmp_palette"; then
+        echo "lock-album-art-fetch: could not read the colours of $art_url" >&2
+        exit 0
+      fi
+
+      # How far to stop the backdrop down, as a percentage for `-modulate`.
+      # Written by the awk above, and re-checked here because it is about to
+      # be interpolated into a command line.
+      art_brightness="$(
+        gawk -F= '$1 == "ART_BRIGHTNESS" { print $2; exit }' "$tmp_palette"
+      )"
+
+      case "$art_brightness" in
+        "" | *[!0-9]*) art_brightness=100 ;;
+      esac
+
       # The backdrop. Blurring at 512px and scaling the result up costs a
       # fraction of blurring at 2560px and lands in the same place once it is
       # this soft — the detail was on its way out either way. The square crop
       # first is for the players that report a 16:9 thumbnail instead of a
       # cover.
       #
-      # `-modulate` is the one thing here that is about the lock screen rather
-      # than about the picture. Hyprlock's own `brightness` in the background
-      # block is set for the wallpapers, which are chosen and are mostly dark;
-      # album covers are neither, and a sleeve that is mostly white or mostly
-      # neon yellow leaves the pale theme foreground sitting on top of it
-      # unreadable. The extra fifth off, with a little saturation back to stop
-      # it going muddy, puts a cover in the same range the wallpapers occupy —
-      # which is what the two of them swapping under a crossfade needs.
+      # The exposure is the one thing here that is about the lock screen
+      # rather than about the picture. Hyprlock's own `brightness` in the
+      # background block is a fixed multiplier set for the wallpapers, which
+      # are chosen and are mostly dark; album covers are neither, and a sleeve
+      # that is mostly white leaves every label on this screen sitting on a
+      # pale wash, unreadable. So the cover is exposed *to* a target instead
+      # of by a constant — see the reasoning in album-palette.awk — with a
+      # little saturation put back to stop the dimming going muddy.
       if ! magick "''${source_file}[0]" \
           -auto-orient -strip -colorspace sRGB \
           -resize 512x512^ -gravity center -extent 512x512 \
           -blur 0x8 \
-          -modulate 78,110 \
+          -modulate "$art_brightness,110" \
           -filter Lanczos -resize 2560x1440^ \
           -gravity center -extent 2560x1440 \
           -quality 92 "jpg:$tmp_backdrop"; then
@@ -1076,8 +1117,13 @@ lockNowPlaying = pkgs.writeShellApplication {
 
       # Into place only now, and one rename each, so the reload timer either
       # finds the old answer or a finished new one and never a partial file.
+      # The palette goes last on purpose. `lock-session` takes its colours
+      # from it and its pictures from the other two, so a palette on disk has
+      # to mean the pictures are already there — otherwise a lock landing in
+      # this gap would wear a cover it is not showing.
       mv -f "$tmp_backdrop" "$art_backdrop"
       mv -f "$tmp_cover" "$art_cover"
+      mv -f "$tmp_palette" "$art_palette"
 
       # Keep the cache bounded. Thirty tracks each way is a few megabytes and
       # covers an evening of skipping; past that it is a song you are not
@@ -1092,6 +1138,7 @@ lockNowPlaying = pkgs.writeShellApplication {
 
       prune_art '*.backdrop.jpg' || true
       prune_art '*.cover.png' || true
+      prune_art '*.palette' || true
 
       # And the lock files, which are empty and never numerous, but are
       # otherwise the one thing here that only accumulates. A week is far
@@ -1128,49 +1175,88 @@ lockNowPlaying = pkgs.writeShellApplication {
       mode="''${1:-}"
 
       case "$mode" in
-        backdrop | cover) ;;
+        backdrop | cover | palette | all) ;;
         *)
-          echo "usage: lock-album-art backdrop|cover" >&2
+          echo "usage: lock-album-art backdrop|cover|palette|all" >&2
           exit 2
           ;;
       esac
 
       ${currentArtUrl}
 
-      if [ -n "$art_url" ]; then
-        rendered="$(art_path "$art_url" "$mode")"
+      key=""
+      [ -z "$art_url" ] || key="$(art_key "$art_url")"
 
-        if [ -f "$rendered" ]; then
-          printf '%s\n' "$rendered"
-          exit 0
+      # One answer, for one of the three things a lock screen takes from a
+      # cover. Prints nothing when there is nothing to say.
+      answer() {
+        local want="$1" rendered
+
+        if [ -n "$key" ]; then
+          rendered="$(art_path "$key" "$want")"
+
+          if [ -f "$rendered" ]; then
+            printf '%s\n' "$rendered"
+            return 0
+          fi
         fi
 
-        # Nothing rendered for this track yet: start the work and answer with
-        # what is true right now. Every descriptor is redirected before the
-        # fork because Hyprlock is reading this command's stdout, and a pipe
-        # left open in the worker would keep it waiting on the download after
-        # all the trouble taken not to.
-        setsid -f ${lib.getExe lockAlbumArtFetch} "$art_url" \
-          </dev/null >/dev/null 2>&1 || true
+        case "$want" in
+          backdrop)
+            # The wallpaper is the answer whenever the cover isn't: no music,
+            # a cover that could not be fetched, or one still rendering.
+            # Hyprlock crossfades between whatever two paths it is handed, so
+            # the swap reads as a transition in both directions.
+            hyprlock_wallpaper
+            ;;
+
+          cover)
+            if [ -z "$art_url" ]; then
+              printf '%s\n' "${emptyCover}"
+            fi
+
+            # With a cover on the way, print nothing at all. Hyprlock keeps
+            # what it has, which holds the last cover on screen for the second
+            # the new one takes rather than blinking through the empty one.
+            ;;
+
+          palette)
+            # And nothing to fall back to here: no palette means the lock
+            # screen keeps the theme's own colours, which is what the caller
+            # does with an empty answer anyway.
+            ;;
+        esac
+      }
+
+      # Anything missing starts the render, once, however many answers are
+      # being asked for. Every descriptor is redirected before the fork
+      # because Hyprlock is reading this command's stdout, and a pipe left
+      # open in the worker would keep it waiting on the download after all the
+      # trouble taken not to.
+      if [ -n "$key" ]; then
+        for want in backdrop cover palette; do
+          if [ ! -f "$(art_path "$key" "$want")" ]; then
+            setsid -f ${lib.getExe lockAlbumArtFetch} "$art_url" \
+              </dev/null >/dev/null 2>&1 || true
+            break
+          fi
+        done
       fi
 
       case "$mode" in
-        backdrop)
-          # The wallpaper is the answer whenever the cover isn't: no music, a
-          # cover that could not be fetched, or one still rendering. Hyprlock
-          # crossfades between whatever two paths it is handed, so the swap
-          # reads as a transition in both directions.
-          hyprlock_wallpaper
+        # Everything `lock-session` needs, in one run. It asks on the path
+        # that has to have the screen locked before the machine suspends, and
+        # three separate runs would be three separate rounds of MPRIS calls
+        # for one question about one track.
+        all)
+          for want in backdrop cover palette; do
+            value="$(answer "$want")"
+            [ -z "$value" ] || printf '%s=%s\n' "$want" "$value"
+          done
           ;;
 
         *)
-          if [ -z "$art_url" ]; then
-            printf '%s\n' "${emptyCover}"
-          fi
-
-          # With a cover on the way, print nothing at all. Hyprlock keeps what
-          # it has, which holds the last cover on screen for the second the
-          # new one takes rather than blinking through the empty one.
+          answer "$mode"
           ;;
       esac
     '';
@@ -1313,9 +1399,19 @@ lockNowPlaying = pkgs.writeShellApplication {
     #
     # Under a `timeout` because this is the path that has to have the screen
     # locked before the machine suspends. lock-album-art bounds its own MPRIS
-    # queries and should never come near this, and if it does, the wallpaper
-    # is the answer it was going to give anyway.
-    backdrop="$(timeout 2 ${lib.getExe lockAlbumArt} backdrop || true)"
+    # queries and should never come near this, and if it does, everything
+    # below falls back to what it would show without music.
+    backdrop=""
+    cover=""
+    palette=""
+
+    while IFS='=' read -r kind value; do
+      case "$kind" in
+        backdrop) backdrop="$value" ;;
+        cover)    cover="$value" ;;
+        palette)  palette="$value" ;;
+      esac
+    done < <(timeout 2 ${lib.getExe lockAlbumArt} all || true)
 
     if [ -z "$backdrop" ]; then
       backdrop="$(hyprlock_wallpaper)"
@@ -1331,10 +1427,43 @@ lockNowPlaying = pkgs.writeShellApplication {
     # has something valid to point at from the first frame: a transparent one
     # when nothing is playing, or when the cover is still rendering and the
     # reload timer is about to bring it in.
-    cover="$(timeout 2 ${lib.getExe lockAlbumArt} cover || true)"
-
     if [ -z "$cover" ]; then
       cover="${emptyCover}"
+    fi
+
+    # And the album's own colours over the theme's, when the cover had a
+    # colour confident enough to take. `album-palette.awk` decides that and
+    # writes the file. `LOCK_ERR` and `LOCK_WARN` are not in the list below
+    # and keep the theme's values: an error is red and a caps-lock warning is
+    # yellow whatever happens to be playing.
+    #
+    # These colours are fixed for the life of the lock screen even though the
+    # pictures behind them are not. Hyprlock can be told to re-read a path
+    # while it is up, through `reload_cmd`, but there is no equivalent for a
+    # colour anywhere in its config — and of the things asked for here, the
+    # password field's is the one that could not be faked with markup in a
+    # label. Recolouring only what could be recoloured would leave a lock
+    # screen half in one album's colours and half in another's, which is worse
+    # than a lock screen that simply wears the track it was locked on.
+    #
+    # Read rather than sourced. The file is ours and holds nothing but
+    # assignments, but it is a cache file rather than a store path, and this
+    # is the script that stands between a locked session and the desktop.
+    if [ -n "$palette" ] && [ -r "$palette" ]; then
+      while IFS='=' read -r key value; do
+        case "$value" in
+          [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+          *) continue ;;
+        esac
+
+        case "$key" in
+          LOCK_BG)         LOCK_BG="$value" ;;
+          LOCK_ACCENT)     LOCK_ACCENT="$value" ;;
+          LOCK_ACCENT_DIM) LOCK_ACCENT_DIM="$value" ;;
+          LOCK_FG)         LOCK_FG="$value" ;;
+          LOCK_FG_DIM)     LOCK_FG_DIM="$value" ;;
+        esac
+      done < "$palette"
     fi
 
     # Read straight for the swaylock fallback at the bottom, which stays on
